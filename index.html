@@ -1,0 +1,602 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Banker Ledger</title>
+
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      background: #111;
+      color: #fff;
+      padding: 16px;
+      max-width: 760px;
+      margin: auto;
+    }
+
+    h1, h2, h3 { color: #ffd369; }
+
+    input, select, button, textarea {
+      padding: 10px;
+      margin: 5px 0;
+      width: 100%;
+      box-sizing: border-box;
+      border-radius: 8px;
+      border: none;
+      font-size: 16px;
+    }
+
+    textarea {
+      min-height: 70px;
+      resize: vertical;
+    }
+
+    button {
+      background: #ffd369;
+      color: #111;
+      font-weight: bold;
+      cursor: pointer;
+    }
+
+    .danger { background: #ff5c5c; color: white; }
+    .secondary { background: #777; color: white; }
+    .card {
+      background: #222;
+      padding: 14px;
+      border-radius: 12px;
+      margin: 12px 0;
+    }
+
+    .positive { color: #fca5a5; font-weight: bold; }
+    .negative { color: #6ee7b7; font-weight: bold; }
+    .even { color: #ddd; font-weight: bold; }
+    .small { font-size: 14px; color: #bbb; }
+
+    .row {
+      display: flex;
+      gap: 8px;
+    }
+
+    .row button {
+      flex: 1;
+    }
+
+    hr {
+      border: 0;
+      border-top: 1px solid #444;
+      margin: 12px 0;
+    }
+  </style>
+</head>
+
+<body>
+
+<h1>Banker Ledger</h1>
+
+<div class="card">
+  <h2>Add Person</h2>
+  <input id="personName" placeholder="Person name">
+  <button onclick="addPerson()">Add Person</button>
+</div>
+
+<div class="card">
+  <h2>Add Transaction</h2>
+
+  <input id="transactionDate" type="date">
+
+  <select id="transactionPerson"></select>
+
+  <select id="transactionType">
+    <option value="person_owes">Person owes Mojtaba</option>
+    <option value="mojtaba_owes">Mojtaba owes person</option>
+    <option value="person_paid">Person paid Mojtaba</option>
+    <option value="mojtaba_paid">Mojtaba paid person</option>
+  </select>
+
+  <input id="transactionAmount" type="number" placeholder="Amount, e.g. 50">
+
+  <textarea id="transactionNote" placeholder="Note, e.g. borrowed cash, dinner, poker balance"></textarea>
+
+  <button onclick="addTransaction()">Add Transaction</button>
+</div>
+
+<div class="card">
+  <h2>Summary</h2>
+  <div id="summary"></div>
+  <button onclick="copySettlementMessage()">Copy Settlement Message</button>
+</div>
+
+<h2>People</h2>
+<div id="people"></div>
+
+<div class="card">
+  <h2>Transaction History</h2>
+
+  <select id="filterPerson" onchange="render()"></select>
+
+  <select id="sortOrder" onchange="render()">
+    <option value="newest">Newest first</option>
+    <option value="oldest">Oldest first</option>
+  </select>
+
+  <div id="transactions"></div>
+</div>
+
+<div class="card">
+  <h2>Backup / Restore</h2>
+  <button onclick="exportBackup()">Export Backup</button>
+  <input id="restoreFile" type="file" accept=".json" onchange="restoreBackup(event)">
+</div>
+
+<button class="danger" onclick="resetEverything()">Reset Everything</button>
+
+<script>
+const BANKER_NAME = "Mojtaba";
+const STORAGE_KEY = "bankerLedgerData";
+
+let people = [];
+let transactions = [];
+
+function loadData() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(STORAGE_KEY));
+    if (saved) {
+      people = saved.people || [];
+      transactions = saved.transactions || [];
+    }
+  } catch (e) {
+    people = [];
+    transactions = [];
+  }
+}
+
+function saveData() {
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify({
+      people,
+      transactions
+    }));
+  } catch (e) {
+    console.log("Storage not available.");
+  }
+}
+
+function todayISODate() {
+  return new Date().toISOString().split("T")[0];
+}
+
+function readableDate(dateString) {
+  const date = new Date(dateString + "T00:00:00");
+  return date.toLocaleDateString();
+}
+
+function money(amount) {
+  return "$" + Number(amount).toFixed(2);
+}
+
+function setDefaultDate() {
+  const input = document.getElementById("transactionDate");
+  if (!input.value) input.value = todayISODate();
+}
+
+function addPerson() {
+  const name = document.getElementById("personName").value.trim();
+  if (!name) return alert("Enter a name.");
+
+  if (name.toLowerCase() === BANKER_NAME.toLowerCase()) {
+    return alert("Mojtaba is the banker and does not need to be added.");
+  }
+
+  if (people.find(p => p.name.toLowerCase() === name.toLowerCase())) {
+    return alert("That person already exists.");
+  }
+
+  people.push({
+    id: Date.now().toString(),
+    name
+  });
+
+  document.getElementById("personName").value = "";
+
+  saveData();
+  render();
+}
+
+function renamePerson(personId) {
+  const person = people.find(p => p.id === personId);
+  if (!person) return;
+
+  const newName = prompt("New name:", person.name);
+  if (!newName || !newName.trim()) return;
+
+  const cleanName = newName.trim();
+
+  if (people.find(p => p.id !== personId && p.name.toLowerCase() === cleanName.toLowerCase())) {
+    return alert("That name already exists.");
+  }
+
+  person.name = cleanName;
+
+  saveData();
+  render();
+}
+
+function removePerson(personId) {
+  const person = people.find(p => p.id === personId);
+  if (!person) return;
+
+  if (!confirm("Remove this person? Their transactions will also be deleted.")) return;
+
+  people = people.filter(p => p.id !== personId);
+  transactions = transactions.filter(t => t.personId !== personId);
+
+  saveData();
+  render();
+}
+
+function addTransaction() {
+  const date = document.getElementById("transactionDate").value || todayISODate();
+  const personId = document.getElementById("transactionPerson").value;
+  const type = document.getElementById("transactionType").value;
+  const amount = parseFloat(document.getElementById("transactionAmount").value);
+  const note = document.getElementById("transactionNote").value.trim();
+
+  if (!personId) return alert("Choose a person.");
+  if (isNaN(amount) || amount <= 0) return alert("Enter a valid amount.");
+
+  transactions.push({
+    id: Date.now().toString() + Math.random().toString(36).slice(2),
+    date,
+    personId,
+    type,
+    amount,
+    note
+  });
+
+  document.getElementById("transactionAmount").value = "";
+  document.getElementById("transactionNote").value = "";
+
+  saveData();
+  render();
+}
+
+function getTransactionEffect(transaction) {
+  if (transaction.type === "person_owes") return transaction.amount;
+  if (transaction.type === "mojtaba_owes") return -transaction.amount;
+  if (transaction.type === "person_paid") return -transaction.amount;
+  if (transaction.type === "mojtaba_paid") return transaction.amount;
+  return 0;
+}
+
+function getBalance(personId) {
+  return transactions
+    .filter(t => t.personId === personId)
+    .reduce((sum, t) => sum + getTransactionEffect(t), 0);
+}
+
+function getLastActivity(personId) {
+  const personTransactions = transactions
+    .filter(t => t.personId === personId)
+    .sort((a, b) => b.date.localeCompare(a.date));
+
+  return personTransactions.length ? readableDate(personTransactions[0].date) : "No activity";
+}
+
+function typeLabel(type, personName) {
+  if (type === "person_owes") return `${personName} owes ${BANKER_NAME}`;
+  if (type === "mojtaba_owes") return `${BANKER_NAME} owes ${personName}`;
+  if (type === "person_paid") return `${personName} paid ${BANKER_NAME}`;
+  if (type === "mojtaba_paid") return `${BANKER_NAME} paid ${personName}`;
+  return type;
+}
+
+function editTransaction(id) {
+  const transaction = transactions.find(t => t.id === id);
+  if (!transaction) return;
+
+  const newAmount = prompt("Edit amount:", transaction.amount);
+  if (newAmount === null) return;
+
+  const amount = parseFloat(newAmount);
+  if (isNaN(amount) || amount <= 0) return alert("Enter a valid amount.");
+
+  const newDate = prompt("Edit date YYYY-MM-DD:", transaction.date);
+  if (!newDate) return;
+
+  const newNote = prompt("Edit note:", transaction.note || "");
+  if (newNote === null) return;
+
+  transaction.amount = amount;
+  transaction.date = newDate;
+  transaction.note = newNote.trim();
+
+  saveData();
+  render();
+}
+
+function deleteTransaction(id) {
+  if (!confirm("Delete this transaction?")) return;
+
+  transactions = transactions.filter(t => t.id !== id);
+  saveData();
+  render();
+}
+
+function markPersonSettled(personId) {
+  const balance = getBalance(personId);
+  const person = people.find(p => p.id === personId);
+
+  if (!person || balance === 0) return;
+
+  if (!confirm(`Mark ${person.name} as settled?`)) return;
+
+  let type;
+
+  if (balance > 0) {
+    type = "person_paid";
+  } else {
+    type = "mojtaba_paid";
+  }
+
+  transactions.push({
+    id: Date.now().toString() + Math.random().toString(36).slice(2),
+    date: todayISODate(),
+    personId,
+    type,
+    amount: Math.abs(balance),
+    note: "Settled balance"
+  });
+
+  saveData();
+  render();
+}
+
+function render() {
+  setDefaultDate();
+  renderPersonOptions();
+  renderFilterOptions();
+  renderSummary();
+  renderPeople();
+  renderTransactions();
+}
+
+function renderPersonOptions() {
+  const select = document.getElementById("transactionPerson");
+  const current = select.value;
+
+  select.innerHTML = "";
+
+  if (people.length === 0) {
+    select.innerHTML = `<option value="">Add people first</option>`;
+    return;
+  }
+
+  people.forEach(person => {
+    select.innerHTML += `<option value="${person.id}">${person.name}</option>`;
+  });
+
+  if (current) select.value = current;
+}
+
+function renderFilterOptions() {
+  const select = document.getElementById("filterPerson");
+  const current = select.value;
+
+  select.innerHTML = `<option value="all">All people</option>`;
+
+  people.forEach(person => {
+    select.innerHTML += `<option value="${person.id}">${person.name}</option>`;
+  });
+
+  if (current) select.value = current;
+}
+
+function renderSummary() {
+  const div = document.getElementById("summary");
+
+  let totalOwedToBank = 0;
+  let totalBankOwes = 0;
+
+  people.forEach(person => {
+    const balance = getBalance(person.id);
+
+    if (balance > 0) totalOwedToBank += balance;
+    if (balance < 0) totalBankOwes += Math.abs(balance);
+  });
+
+  const net = totalOwedToBank - totalBankOwes;
+
+  div.innerHTML = `
+    <p>Total people owe ${BANKER_NAME}: <span class="positive">${money(totalOwedToBank)}</span></p>
+    <p>Total ${BANKER_NAME} owes people: <span class="negative">${money(totalBankOwes)}</span></p>
+    <p>Net bank position: <span class="${net >= 0 ? "positive" : "negative"}">${money(net)}</span></p>
+  `;
+}
+
+function renderPeople() {
+  const div = document.getElementById("people");
+  div.innerHTML = "";
+
+  if (people.length === 0) {
+    div.innerHTML = "<p class='small'>No people added yet.</p>";
+    return;
+  }
+
+  const sortedPeople = [...people].sort((a, b) => getBalance(b.id) - getBalance(a.id));
+
+  sortedPeople.forEach(person => {
+    const balance = getBalance(person.id);
+
+    let balanceText;
+    let className;
+
+    if (balance > 0) {
+      balanceText = `${person.name} owes ${BANKER_NAME}: ${money(balance)}`;
+      className = "positive";
+    } else if (balance < 0) {
+      balanceText = `${BANKER_NAME} owes ${person.name}: ${money(Math.abs(balance))}`;
+      className = "negative";
+    } else {
+      balanceText = `${person.name} is even with ${BANKER_NAME}`;
+      className = "even";
+    }
+
+    div.innerHTML += `
+      <div class="card">
+        <h3>${person.name}</h3>
+        <p class="${className}">${balanceText}</p>
+        <p class="small">Last activity: ${getLastActivity(person.id)}</p>
+
+        <div class="row">
+          <button onclick="markPersonSettled('${person.id}')">Mark Settled</button>
+          <button class="secondary" onclick="renamePerson('${person.id}')">Rename</button>
+        </div>
+
+        <button class="danger" onclick="removePerson('${person.id}')">Remove Person</button>
+      </div>
+    `;
+  });
+}
+
+function renderTransactions() {
+  const div = document.getElementById("transactions");
+  const filterPerson = document.getElementById("filterPerson").value;
+  const sortOrder = document.getElementById("sortOrder").value;
+
+  let filtered = [...transactions];
+
+  if (filterPerson !== "all") {
+    filtered = filtered.filter(t => t.personId === filterPerson);
+  }
+
+  filtered.sort((a, b) => {
+    if (sortOrder === "newest") return b.date.localeCompare(a.date);
+    return a.date.localeCompare(b.date);
+  });
+
+  div.innerHTML = "";
+
+  if (filtered.length === 0) {
+    div.innerHTML = "<p class='small'>No transactions yet.</p>";
+    return;
+  }
+
+  filtered.forEach(t => {
+    const person = people.find(p => p.id === t.personId);
+    if (!person) return;
+
+    const effect = getTransactionEffect(t);
+
+    div.innerHTML += `
+      <div class="card">
+        <h3>${readableDate(t.date)}</h3>
+        <p>${typeLabel(t.type, person.name)}</p>
+        <p>
+          Amount:
+          <span class="${effect >= 0 ? "positive" : "negative"}">
+            ${money(t.amount)}
+          </span>
+        </p>
+        ${t.note ? `<p class="small">Note: ${t.note}</p>` : ""}
+        <div class="row">
+          <button class="secondary" onclick="editTransaction('${t.id}')">Edit</button>
+          <button class="danger" onclick="deleteTransaction('${t.id}')">Delete</button>
+        </div>
+      </div>
+    `;
+  });
+}
+
+function copySettlementMessage() {
+  let lines = [`Banker Ledger Summary:`];
+
+  people.forEach(person => {
+    const balance = getBalance(person.id);
+
+    if (balance > 0) {
+      lines.push(`${person.name} owes ${BANKER_NAME}: ${money(balance)}`);
+    } else if (balance < 0) {
+      lines.push(`${BANKER_NAME} owes ${person.name}: ${money(Math.abs(balance))}`);
+    }
+  });
+
+  if (lines.length === 1) {
+    lines.push("Everyone is even.");
+  }
+
+  const text = lines.join("\n");
+
+  navigator.clipboard.writeText(text)
+    .then(() => alert("Settlement message copied."))
+    .catch(() => alert(text));
+}
+
+function exportBackup() {
+  const data = {
+    app: "Banker Ledger",
+    exportedAt: new Date().toISOString(),
+    people,
+    transactions
+  };
+
+  const blob = new Blob([JSON.stringify(data, null, 2)], {
+    type: "application/json"
+  });
+
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+
+  a.href = url;
+  a.download = "banker-ledger-backup-" + todayISODate() + ".json";
+  a.click();
+
+  URL.revokeObjectURL(url);
+}
+
+function restoreBackup(event) {
+  const file = event.target.files[0];
+  if (!file) return;
+
+  const reader = new FileReader();
+
+  reader.onload = function(e) {
+    try {
+      const data = JSON.parse(e.target.result);
+
+      if (!data.people || !data.transactions) {
+        return alert("This does not look like a valid Banker Ledger backup.");
+      }
+
+      if (!confirm("Restore this backup? It will replace the current data.")) return;
+
+      people = data.people || [];
+      transactions = data.transactions || [];
+
+      saveData();
+      render();
+
+      alert("Backup restored.");
+    } catch (err) {
+      alert("Could not read backup file.");
+    }
+  };
+
+  reader.readAsText(file);
+}
+
+function resetEverything() {
+  if (!confirm("Reset EVERYTHING? This deletes all people and transactions.")) return;
+
+  people = [];
+  transactions = [];
+
+  saveData();
+  render();
+}
+
+loadData();
+render();
+</script>
+
+</body>
+</html>
