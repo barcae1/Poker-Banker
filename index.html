@@ -57,9 +57,7 @@
       gap: 8px;
     }
 
-    .row button {
-      flex: 1;
-    }
+    .row button { flex: 1; }
 
     hr {
       border: 0;
@@ -103,7 +101,39 @@
 <div class="card">
   <h2>Summary</h2>
   <div id="summary"></div>
-  <button onclick="copySettlementMessage()">Copy Settlement Message</button>
+</div>
+
+<div class="card">
+  <h2>Settlement Report</h2>
+  <div id="settlementReport"></div>
+  <button onclick="copySettlementMessage()">Copy Settlement Report</button>
+</div>
+
+<div class="card">
+  <h2>Poker Expense Bank</h2>
+
+  <div id="expenseBankSummary"></div>
+
+  <hr>
+
+  <h3>Add Money to Expense Bank</h3>
+  <input id="fundDate" type="date">
+  <input id="fundAmount" type="number" placeholder="Amount added, e.g. 20">
+  <textarea id="fundNote" placeholder="Note, e.g. players contributed for supplies"></textarea>
+  <button onclick="addExpenseBankEntry('deposit')">Add Money</button>
+
+  <hr>
+
+  <h3>Add Poker Expense</h3>
+  <input id="spendDate" type="date">
+  <input id="spendAmount" type="number" placeholder="Amount spent, e.g. 12">
+  <textarea id="spendNote" placeholder="Expense note, e.g. chips, cards, water"></textarea>
+  <button onclick="addExpenseBankEntry('expense')">Add Expense</button>
+
+  <hr>
+
+  <h3>Expense Bank History</h3>
+  <div id="expenseBankHistory"></div>
 </div>
 
 <h2>People</h2>
@@ -136,17 +166,21 @@ const STORAGE_KEY = "bankerLedgerData";
 
 let people = [];
 let transactions = [];
+let expenseBank = [];
 
 function loadData() {
   try {
     const saved = JSON.parse(localStorage.getItem(STORAGE_KEY));
+
     if (saved) {
       people = saved.people || [];
       transactions = saved.transactions || [];
+      expenseBank = saved.expenseBank || [];
     }
   } catch (e) {
     people = [];
     transactions = [];
+    expenseBank = [];
   }
 }
 
@@ -154,7 +188,8 @@ function saveData() {
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify({
       people,
-      transactions
+      transactions,
+      expenseBank
     }));
   } catch (e) {
     console.log("Storage not available.");
@@ -174,9 +209,11 @@ function money(amount) {
   return "$" + Number(amount).toFixed(2);
 }
 
-function setDefaultDate() {
-  const input = document.getElementById("transactionDate");
-  if (!input.value) input.value = todayISODate();
+function setDefaultDates() {
+  ["transactionDate", "fundDate", "spendDate"].forEach(id => {
+    const input = document.getElementById(id);
+    if (input && !input.value) input.value = todayISODate();
+  });
 }
 
 function addPerson() {
@@ -351,13 +388,92 @@ function markPersonSettled(personId) {
   render();
 }
 
+function addExpenseBankEntry(type) {
+  const isDeposit = type === "deposit";
+
+  const dateInput = isDeposit ? "fundDate" : "spendDate";
+  const amountInput = isDeposit ? "fundAmount" : "spendAmount";
+  const noteInput = isDeposit ? "fundNote" : "spendNote";
+
+  const date = document.getElementById(dateInput).value || todayISODate();
+  const amount = parseFloat(document.getElementById(amountInput).value);
+  const note = document.getElementById(noteInput).value.trim();
+
+  if (isNaN(amount) || amount <= 0) return alert("Enter a valid amount.");
+
+  expenseBank.push({
+    id: Date.now().toString() + Math.random().toString(36).slice(2),
+    date,
+    type,
+    amount,
+    note
+  });
+
+  document.getElementById(amountInput).value = "";
+  document.getElementById(noteInput).value = "";
+
+  saveData();
+  render();
+}
+
+function getExpenseBankTotals() {
+  let totalAdded = 0;
+  let totalSpent = 0;
+
+  expenseBank.forEach(entry => {
+    if (entry.type === "deposit") totalAdded += entry.amount;
+    if (entry.type === "expense") totalSpent += entry.amount;
+  });
+
+  return {
+    totalAdded,
+    totalSpent,
+    remaining: totalAdded - totalSpent
+  };
+}
+
+function editExpenseBankEntry(id) {
+  const entry = expenseBank.find(e => e.id === id);
+  if (!entry) return;
+
+  const newAmount = prompt("Edit amount:", entry.amount);
+  if (newAmount === null) return;
+
+  const amount = parseFloat(newAmount);
+  if (isNaN(amount) || amount <= 0) return alert("Enter a valid amount.");
+
+  const newDate = prompt("Edit date YYYY-MM-DD:", entry.date);
+  if (!newDate) return;
+
+  const newNote = prompt("Edit note:", entry.note || "");
+  if (newNote === null) return;
+
+  entry.amount = amount;
+  entry.date = newDate;
+  entry.note = newNote.trim();
+
+  saveData();
+  render();
+}
+
+function deleteExpenseBankEntry(id) {
+  if (!confirm("Delete this expense bank entry?")) return;
+
+  expenseBank = expenseBank.filter(e => e.id !== id);
+
+  saveData();
+  render();
+}
+
 function render() {
-  setDefaultDate();
+  setDefaultDates();
   renderPersonOptions();
   renderFilterOptions();
   renderSummary();
+  renderSettlementReport();
   renderPeople();
   renderTransactions();
+  renderExpenseBank();
 }
 
 function renderPersonOptions() {
@@ -391,9 +507,7 @@ function renderFilterOptions() {
   if (current) select.value = current;
 }
 
-function renderSummary() {
-  const div = document.getElementById("summary");
-
+function getSummaryData() {
   let totalOwedToBank = 0;
   let totalBankOwes = 0;
 
@@ -404,13 +518,74 @@ function renderSummary() {
     if (balance < 0) totalBankOwes += Math.abs(balance);
   });
 
-  const net = totalOwedToBank - totalBankOwes;
+  return {
+    totalOwedToBank,
+    totalBankOwes,
+    net: totalOwedToBank - totalBankOwes
+  };
+}
+
+function renderSummary() {
+  const div = document.getElementById("summary");
+  const summary = getSummaryData();
 
   div.innerHTML = `
-    <p>Total people owe ${BANKER_NAME}: <span class="positive">${money(totalOwedToBank)}</span></p>
-    <p>Total ${BANKER_NAME} owes people: <span class="negative">${money(totalBankOwes)}</span></p>
-    <p>Net bank position: <span class="${net >= 0 ? "positive" : "negative"}">${money(net)}</span></p>
+    <p>Total people owe ${BANKER_NAME}: <span class="positive">${money(summary.totalOwedToBank)}</span></p>
+    <p>Total ${BANKER_NAME} owes people: <span class="negative">${money(summary.totalBankOwes)}</span></p>
+    <p>Net position: <span class="${summary.net >= 0 ? "positive" : "negative"}">${money(summary.net)}</span></p>
   `;
+}
+
+function renderSettlementReport() {
+  const div = document.getElementById("settlementReport");
+  const summary = getSummaryData();
+
+  const peopleWhoOwe = [];
+  const peopleBankOwes = [];
+
+  people.forEach(person => {
+    const balance = getBalance(person.id);
+
+    if (balance > 0) {
+      peopleWhoOwe.push({ name: person.name, amount: balance });
+    } else if (balance < 0) {
+      peopleBankOwes.push({ name: person.name, amount: Math.abs(balance) });
+    }
+  });
+
+  peopleWhoOwe.sort((a, b) => b.amount - a.amount);
+  peopleBankOwes.sort((a, b) => b.amount - a.amount);
+
+  let html = "";
+
+  html += `<h3>People who owe ${BANKER_NAME}</h3>`;
+
+  if (peopleWhoOwe.length === 0) {
+    html += `<p class="small">Nobody owes ${BANKER_NAME}.</p>`;
+  } else {
+    peopleWhoOwe.forEach(item => {
+      html += `<p class="positive">${item.name} owes ${BANKER_NAME}: ${money(item.amount)}</p>`;
+    });
+  }
+
+  html += `<hr><h3>People ${BANKER_NAME} owes</h3>`;
+
+  if (peopleBankOwes.length === 0) {
+    html += `<p class="small">${BANKER_NAME} does not owe anyone.</p>`;
+  } else {
+    peopleBankOwes.forEach(item => {
+      html += `<p class="negative">${BANKER_NAME} owes ${item.name}: ${money(item.amount)}</p>`;
+    });
+  }
+
+  html += `
+    <hr>
+    <p>Total to collect: <span class="positive">${money(summary.totalOwedToBank)}</span></p>
+    <p>Total to pay out: <span class="negative">${money(summary.totalBankOwes)}</span></p>
+    <p>Net position: <span class="${summary.net >= 0 ? "positive" : "negative"}">${money(summary.net)}</span></p>
+  `;
+
+  div.innerHTML = html;
 }
 
 function renderPeople() {
@@ -507,27 +682,97 @@ function renderTransactions() {
   });
 }
 
-function copySettlementMessage() {
-  let lines = [`Banker Ledger Summary:`];
+function renderExpenseBank() {
+  const summaryDiv = document.getElementById("expenseBankSummary");
+  const historyDiv = document.getElementById("expenseBankHistory");
+
+  const totals = getExpenseBankTotals();
+
+  summaryDiv.innerHTML = `
+    <p>Total added to expense bank: <span class="negative">${money(totals.totalAdded)}</span></p>
+    <p>Total spent from expense bank: <span class="positive">${money(totals.totalSpent)}</span></p>
+    <p>
+      Remaining expense bank:
+      <span class="${totals.remaining >= 0 ? "negative" : "positive"}">
+        ${money(totals.remaining)}
+      </span>
+    </p>
+  `;
+
+  historyDiv.innerHTML = "";
+
+  if (expenseBank.length === 0) {
+    historyDiv.innerHTML = "<p class='small'>No expense bank activity yet.</p>";
+    return;
+  }
+
+  const sorted = [...expenseBank].sort((a, b) => b.date.localeCompare(a.date));
+
+  sorted.forEach(entry => {
+    const isDeposit = entry.type === "deposit";
+    const title = isDeposit ? "Money Added" : "Expense";
+    const className = isDeposit ? "negative" : "positive";
+    const sign = isDeposit ? "+" : "-";
+
+    historyDiv.innerHTML += `
+      <div class="card">
+        <h3>${readableDate(entry.date)} — ${title}</h3>
+        <p class="${className}">${sign}${money(entry.amount)}</p>
+        ${entry.note ? `<p class="small">Note: ${entry.note}</p>` : ""}
+        <div class="row">
+          <button class="secondary" onclick="editExpenseBankEntry('${entry.id}')">Edit</button>
+          <button class="danger" onclick="deleteExpenseBankEntry('${entry.id}')">Delete</button>
+        </div>
+      </div>
+    `;
+  });
+}
+
+function buildSettlementMessage() {
+  const summary = getSummaryData();
+  const lines = [];
+
+  lines.push("Banker Ledger Report");
+  lines.push("");
+
+  const peopleWhoOwe = [];
+  const peopleBankOwes = [];
 
   people.forEach(person => {
     const balance = getBalance(person.id);
 
-    if (balance > 0) {
-      lines.push(`${person.name} owes ${BANKER_NAME}: ${money(balance)}`);
-    } else if (balance < 0) {
-      lines.push(`${BANKER_NAME} owes ${person.name}: ${money(Math.abs(balance))}`);
-    }
+    if (balance > 0) peopleWhoOwe.push(`${person.name} owes ${BANKER_NAME}: ${money(balance)}`);
+    if (balance < 0) peopleBankOwes.push(`${BANKER_NAME} owes ${person.name}: ${money(Math.abs(balance))}`);
   });
 
-  if (lines.length === 1) {
-    lines.push("Everyone is even.");
-  }
+  lines.push(`People who owe ${BANKER_NAME}:`);
+  lines.push(...(peopleWhoOwe.length ? peopleWhoOwe : ["None"]));
 
-  const text = lines.join("\n");
+  lines.push("");
+  lines.push(`People ${BANKER_NAME} owes:`);
+  lines.push(...(peopleBankOwes.length ? peopleBankOwes : ["None"]));
+
+  lines.push("");
+  lines.push(`Total to collect: ${money(summary.totalOwedToBank)}`);
+  lines.push(`Total to pay out: ${money(summary.totalBankOwes)}`);
+  lines.push(`Net position: ${money(summary.net)}`);
+
+  const bank = getExpenseBankTotals();
+
+  lines.push("");
+  lines.push("Poker Expense Bank:");
+  lines.push(`Total added: ${money(bank.totalAdded)}`);
+  lines.push(`Total spent: ${money(bank.totalSpent)}`);
+  lines.push(`Remaining: ${money(bank.remaining)}`);
+
+  return lines.join("\n");
+}
+
+function copySettlementMessage() {
+  const text = buildSettlementMessage();
 
   navigator.clipboard.writeText(text)
-    .then(() => alert("Settlement message copied."))
+    .then(() => alert("Settlement report copied."))
     .catch(() => alert(text));
 }
 
@@ -536,7 +781,8 @@ function exportBackup() {
     app: "Banker Ledger",
     exportedAt: new Date().toISOString(),
     people,
-    transactions
+    transactions,
+    expenseBank
   };
 
   const blob = new Blob([JSON.stringify(data, null, 2)], {
@@ -571,6 +817,7 @@ function restoreBackup(event) {
 
       people = data.people || [];
       transactions = data.transactions || [];
+      expenseBank = data.expenseBank || [];
 
       saveData();
       render();
@@ -585,10 +832,11 @@ function restoreBackup(event) {
 }
 
 function resetEverything() {
-  if (!confirm("Reset EVERYTHING? This deletes all people and transactions.")) return;
+  if (!confirm("Reset EVERYTHING? This deletes all people, transactions, and expense bank records.")) return;
 
   people = [];
   transactions = [];
+  expenseBank = [];
 
   saveData();
   render();
